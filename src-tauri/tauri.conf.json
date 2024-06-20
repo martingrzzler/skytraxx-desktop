@@ -4,7 +4,8 @@
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
     "devPath": "http://localhost:3000",
-    "distDir": "../out"
+    "distDir": "../out",
+    "withGlobalTauri": true
   },
   "package": {
     "productName": "desktop",
@@ -33,7 +34,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "identifier": "com.tauri.dev",
+      "identifier": "skytraxx.eu",
       "longDescription": "",
       "macOS": {
         "entitlements": null,

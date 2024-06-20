@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use serde::{Deserialize, Serialize};
-use std::{fmt::format, fs::File};
+use std::fs::File;
 use sysinfo::{Disks, System};
 use tar::Archive;
 use tauri::api::path;
