@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "serve:archive": "serve ./test -p 8888 -C"
   },
   "dependencies": {
     "@nextui-org/button": "^2.0.33",
@@ -27,6 +28,7 @@
     "eslint": "^8",
     "eslint-config-next": "14.2.4",
     "postcss": "^8",
+    "serve": "^14.2.3",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
   }

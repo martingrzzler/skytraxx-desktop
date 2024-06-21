@@ -4,9 +4,14 @@ import { cn } from "@nextui-org/theme";
 import { BaseDirectory } from "@tauri-apps/api/fs";
 import { useState } from "react";
 
-type BackendResponse = {
+type BackendResponse<T> = {
   error?: string;
-  result?: string;
+  result?: T;
+};
+
+type DeviceInfo = {
+  deviceName: string;
+  softwareVersion: string;
 };
 
 export default function Update() {
@@ -15,27 +20,24 @@ export default function Update() {
   const [showSuccess, setShowSuccess] = useState(false);
 
   async function fetchTar() {
-    const res = await fetch(
-      "https://getsamplefiles.com/download/tar/sample-1.tar"
-    );
+    const res = await fetch("http://localhost:8888/archive.tar");
     if (!res.ok) {
       throw new Error("Failed to fetch update");
     }
 
     // @ts-ignore
     await window.__TAURI__.fs.writeBinaryFile(
-      "update.tar",
+      "skytraxx_update.tar",
       await res.arrayBuffer(),
       {
         dir: BaseDirectory.Download,
-      }
+      },
     );
   }
 
   return (
     <div className="m-10">
       <h1 className="text-2xl font-skytraxx">Skytraxx</h1>
-
       <Text ringColor="gray">
         Stelle sicher dass dein SKYTRAXX Vario an deinen Computer angesclossen
         ist. Wir machen den Rest!
@@ -47,22 +49,26 @@ export default function Update() {
         onClick={async () => {
           setError(null);
           setLoading(true);
-          try {
-            await fetchTar();
-          } catch (error) {
+
+          // @ts-ignore
+          const deviceInfoRes = (await window.__TAURI__.tauri.invoke(
+            "get_skytraxx_device",
+          )) as BackendResponse<DeviceInfo>;
+          if (deviceInfoRes.error) {
             setError(
-              "Fehler beim Herunterladen der Datei. Bist du mit dem Internet verbunden?"
+              "Skytraxx Vario konnte nicht gefunden werden. Ist es angeschlossen?",
             );
             setLoading(false);
             return;
           }
-          // @ts-ignore
-          const mountpoint = await window.__TAURI__.tauri.invoke(
-            "find_skytraxx_mountpoint"
-          );
-          if (!mountpoint) {
+
+          console.log(deviceInfoRes.result);
+          // depending on the device info, we can now download the correct tar file
+          try {
+            await fetchTar();
+          } catch (error) {
             setError(
-              "Skytraxx Vario konnte nicht gefunden werden. Ist es angeschlossen?"
+              "Fehler beim Herunterladen der Datei. Bist du mit dem Internet verbunden?",
             );
             setLoading(false);
             return;
@@ -70,11 +76,8 @@ export default function Update() {
 
           // @ts-ignore
           const res: BackendResponse = await window.__TAURI__.tauri.invoke(
-            "extract_transfer_tar",
-            {
-              tarPath: "update.tar",
-              mountpoint,
-            }
+            "update_device",
+            { tarPath: "skytraxx_update.tar", softwareVersion: "4.0.0" },
           );
 
           if (res.error) {

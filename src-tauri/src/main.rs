@@ -1,18 +1,18 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use sysinfo::{Disks, System};
+use std::io;
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+};
+use sysinfo::Disks;
 use tar::Archive;
 use tauri::api::path;
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            greet,
-            find_skytraxx_mountpoint,
-            extract_transfer_tar
-        ])
+        .invoke_handler(tauri::generate_handler![get_skytraxx_device, update_device])
         // .setup(|app| {
         // })
         .run(tauri::generate_context!())
@@ -20,34 +20,30 @@ fn main() {
 }
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}!", name)
+fn get_skytraxx_device() -> FrontendResult<DeviceInfo> {
+    let dict = match get_device_info() {
+        Ok(d) => d,
+        Err(e) => return FrontendResult::error(e.to_string()),
+    };
+
+    let device_name = match dict.get("hw") {
+        Some(name) => name.to_string(),
+        None => return FrontendResult::error("device_name not found".to_string()),
+    };
+
+    let software_version = match dict.get("sw") {
+        Some(version) => version.to_string(),
+        None => return FrontendResult::error("software_version not found".to_string()),
+    };
+
+    FrontendResult::result(DeviceInfo {
+        device_name,
+        software_version,
+    })
 }
 
 #[tauri::command]
-fn find_skytraxx_mountpoint() -> String {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    let disks = Disks::new_with_refreshed_list();
-    let mut mountpoint = String::new();
-
-    for disk in disks.iter() {
-        if disk.name().eq_ignore_ascii_case("skytraxx") {
-            match disk.mount_point().to_str() {
-                None => (),
-                Some(mount) => {
-                    mountpoint = mount.to_string();
-                }
-            }
-        }
-    }
-
-    mountpoint
-}
-
-#[tauri::command]
-fn extract_transfer_tar(tar_path: &str, mountpoint: &str) -> FrontendResult {
+fn update_device(tar_path: &str, software_version: &str) -> FrontendResult<String> {
     let download_dir = path::download_dir().unwrap();
     let f = match File::open(format!("{}/{}", download_dir.to_str().unwrap(), tar_path)) {
         Ok(f) => f,
@@ -55,7 +51,17 @@ fn extract_transfer_tar(tar_path: &str, mountpoint: &str) -> FrontendResult {
     };
     let mut ar = Archive::new(f);
 
-    match ar.unpack(format!("{mountpoint}/update")) {
+    let mountpoint = match find_mountpoint("skytraxx") {
+        Some(m) => m,
+        None => return FrontendResult::error("Skytraxx not found".to_string()),
+    };
+
+    match ar.unpack(format!("{}/data", mountpoint)) {
+        Ok(_) => (),
+        Err(e) => return FrontendResult::error(e.to_string()),
+    }
+
+    match update_device_info(software_version) {
         Ok(_) => (),
         Err(e) => return FrontendResult::error(e.to_string()),
     }
@@ -63,28 +69,129 @@ fn extract_transfer_tar(tar_path: &str, mountpoint: &str) -> FrontendResult {
     FrontendResult::result("Tar extracted successfully".to_string())
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct FrontendResult {
-    error: String,
-    result: String,
+fn get_device_info() -> Result<HashMap<String, String>, io::Error> {
+    let mountpoint = match find_mountpoint("Skytraxx") {
+        Some(m) => m,
+        None => {
+            return Result::Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Skytraxx not found",
+            ))
+        }
+    };
+
+    let sys_file_content = fs::read_to_string(format!("{}/.sys/hwsw.info", mountpoint))?;
+
+    return Ok(parse_lines(&sys_file_content));
 }
 
-impl FrontendResult {
-    fn new(error: String, result: String) -> Self {
-        FrontendResult { error, result }
-    }
+fn update_device_info(software_version: &str) -> Result<(), io::Error> {
+    let mountpoint = match find_mountpoint("Skytraxx") {
+        Some(m) => m,
+        None => {
+            return Result::Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Skytraxx not found",
+            ))
+        }
+    };
 
-    fn error(error: String) -> Self {
-        FrontendResult {
-            error,
-            result: String::new(),
+    let mut dict = get_device_info()?;
+    dict.insert("sw".to_string(), software_version.to_string());
+
+    fs::write(format!("{}/.sys/hwsw.info", mountpoint), write_lines(dict))
+}
+
+fn find_mountpoint(vol_name: &str) -> Option<String> {
+    let disks = Disks::new_with_refreshed_list();
+
+    for disk in disks.iter() {
+        if disk.name().eq_ignore_ascii_case(vol_name) {
+            match disk.mount_point().to_str() {
+                Some(mountpoint) => return Some(mountpoint.to_string()),
+                None => return None,
+            }
         }
     }
 
-    fn result(result: String) -> Self {
+    None
+}
+
+fn write_lines(dict: HashMap<String, String>) -> String {
+    let mut lines = String::new();
+
+    for (key, value) in dict.iter() {
+        lines.push_str(&format!("{}=\"{}\"\n", key, value));
+    }
+
+    lines
+}
+
+fn parse_lines(file_content: &str) -> HashMap<String, String> {
+    let mut dict: HashMap<String, String> = HashMap::new();
+
+    for line in file_content.lines() {
+        let parts: Vec<&str> = line.split('=').collect();
+        if parts.len() == 2 {
+            let key = parts[0].to_string();
+            let value = parts[1].to_string().replace("\"", "");
+            dict.insert(key, value);
+        }
+    }
+
+    dict
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_lines() {
+        let file_content = "hw=\"Skytraxx 3.0\"\nsw=\"3.0.0\"";
+        let dict = parse_lines(file_content);
+
+        assert_eq!(dict.get("hw").unwrap(), "Skytraxx 3.0");
+        assert_eq!(dict.get("sw").unwrap(), "3.0.0");
+    }
+
+    #[test]
+    fn test_write_lines() {
+        let mut dict: HashMap<String, String> = HashMap::new();
+        dict.insert("hw".to_string(), "Skytraxx 3.0".to_string());
+        dict.insert("sw".to_string(), "3.0.0".to_string());
+
+        let lines = write_lines(dict);
+
+        assert_eq!(lines, "hw=\"Skytraxx 3.0\"\nsw=\"3.0.0\"\n");
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct DeviceInfo {
+    device_name: String,
+    software_version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct FrontendResult<T> {
+    error: String,
+    result: Option<T>,
+}
+
+impl<T> FrontendResult<T> {
+    fn error(error: String) -> Self {
+        FrontendResult {
+            error,
+            result: None,
+        }
+    }
+
+    fn result(result: T) -> Self {
         FrontendResult {
             error: String::new(),
-            result,
+            result: Some(result),
         }
     }
 }
