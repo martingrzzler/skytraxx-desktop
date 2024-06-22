@@ -17,6 +17,11 @@
       "fs": {
         "all": true,
         "scope": ["$DOWNLOAD/*"]
+      },
+      "http": {
+        "all": true,
+        "request": true,
+        "scope": ["http://127.0.0.1:8080/*"]
       }
     },
     "bundle": {

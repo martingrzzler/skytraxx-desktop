@@ -1,7 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use std::io;
+use std::thread;
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -9,14 +10,59 @@ use std::{
 use sysinfo::Disks;
 use tar::Archive;
 use tauri::api::path;
+use tauri::Window;
+use tokio::io::AsyncWriteExt;
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_skytraxx_device, update_device])
-        // .setup(|app| {
-        // })
+        .invoke_handler(tauri::generate_handler![
+            get_skytraxx_device,
+            update_device,
+            download_archive
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct DownloadProgress {
+    total: u64,
+    downloaded: u64,
+}
+
+#[tauri::command]
+async fn download_archive(window: Window, url: &str, file_name: &str) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .or(Err("Failed to download archive"))?;
+
+    let total = response.content_length().unwrap_or(0);
+    let download_dir = path::download_dir().unwrap();
+
+    let file_path = format!("{}/{}", download_dir.to_str().unwrap(), file_name);
+    let mut file = tokio::io::BufWriter::new(
+        tokio::fs::File::create(file_path)
+            .await
+            .or(Err("Failed to create file"))?,
+    );
+    let mut stream = response.bytes_stream();
+
+    let mut downloaded = 0;
+    while let Some(chunk) = stream.try_next().await.or(Err("Failed to get chunk"))? {
+        thread::sleep(std::time::Duration::from_millis(100));
+        file.write_all(&chunk)
+            .await
+            .or(Err("Failed to write chunk"))?;
+        downloaded += chunk.len() as u64;
+        let _ = window.emit("DOWNLOAD_PROGRESS", DownloadProgress { total, downloaded });
+    }
+
+    file.flush().await.or(Err("Failed to flush file"))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -69,37 +115,32 @@ fn update_device(tar_path: &str, software_version: &str) -> FrontendResult<Strin
     FrontendResult::result("Tar extracted successfully".to_string())
 }
 
-fn get_device_info() -> Result<HashMap<String, String>, io::Error> {
+fn get_device_info() -> Result<HashMap<String, String>, String> {
     let mountpoint = match find_mountpoint("Skytraxx") {
         Some(m) => m,
         None => {
-            return Result::Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "Skytraxx not found",
-            ))
+            return Err("Skytraxx not found".to_string());
         }
     };
 
-    let sys_file_content = fs::read_to_string(format!("{}/.sys/hwsw.info", mountpoint))?;
+    let sys_file_content = fs::read_to_string(format!("{}/.sys/hwsw.info", mountpoint))
+        .or(Err("Failed to read file"))?;
 
     return Ok(parse_lines(&sys_file_content));
 }
 
-fn update_device_info(software_version: &str) -> Result<(), io::Error> {
+fn update_device_info(software_version: &str) -> Result<(), String> {
     let mountpoint = match find_mountpoint("Skytraxx") {
         Some(m) => m,
         None => {
-            return Result::Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "Skytraxx not found",
-            ))
+            return Err("Skytraxx not found".to_string());
         }
     };
-
     let mut dict = get_device_info()?;
     dict.insert("sw".to_string(), software_version.to_string());
 
     fs::write(format!("{}/.sys/hwsw.info", mountpoint), write_lines(dict))
+        .or(Err("failed to write to file")?)
 }
 
 fn find_mountpoint(vol_name: &str) -> Option<String> {

@@ -1,8 +1,10 @@
 "use client";
+
 import { Button } from "@nextui-org/button";
+import { Progress } from "@nextui-org/progress";
 import { cn } from "@nextui-org/theme";
-import { BaseDirectory } from "@tauri-apps/api/fs";
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/tauri";
 
 type BackendResponse<T> = {
   error?: string;
@@ -14,25 +16,31 @@ type DeviceInfo = {
   softwareVersion: string;
 };
 
+type DownloadProgress = {
+  total: number;
+  downloaded: number;
+};
+
 export default function Update() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [fetchProgress, setFetchProgress] = useState<number | null>(null);
 
-  async function fetchTar() {
-    const res = await fetch("http://localhost:8888/archive.tar");
-    if (!res.ok) {
-      throw new Error("Failed to fetch update");
-    }
-
-    // @ts-ignore
-    await window.__TAURI__.fs.writeBinaryFile(
-      "skytraxx_update.tar",
-      await res.arrayBuffer(),
-      {
-        dir: BaseDirectory.Download,
+  async function fetchWithProgress() {
+    const { appWindow } = await import("@tauri-apps/api/window");
+    appWindow.listen(
+      "DOWNLOAD_PROGRESS",
+      ({ payload }: { payload: DownloadProgress }) => {
+        console.log("Download progress", payload);
+        setFetchProgress((payload.downloaded / payload.total) * 100);
       },
     );
+
+    invoke("download_archive", {
+      url: "http://127.0.0.1:8080/archive.tar",
+      fileName: "skytraxx_update.tar",
+    });
   }
 
   return (
@@ -43,6 +51,9 @@ export default function Update() {
         ist. Wir machen den Rest!
       </Text>
       {error && <Text ringColor="red">{error}</Text>}
+      {fetchProgress !== null && (
+        <Progress className="mt-8 w-1/2" value={fetchProgress} />
+      )}
       <Button
         isLoading={loading}
         isDisabled={loading || showSuccess}
@@ -51,7 +62,7 @@ export default function Update() {
           setLoading(true);
 
           // @ts-ignore
-          const deviceInfoRes = (await window.__TAURI__.tauri.invoke(
+          const deviceInfoRes = (await invoke(
             "get_skytraxx_device",
           )) as BackendResponse<DeviceInfo>;
           if (deviceInfoRes.error) {
@@ -65,8 +76,9 @@ export default function Update() {
           console.log(deviceInfoRes.result);
           // depending on the device info, we can now download the correct tar file
           try {
-            await fetchTar();
+            await fetchWithProgress();
           } catch (error) {
+            console.log("Download error", error);
             setError(
               "Fehler beim Herunterladen der Datei. Bist du mit dem Internet verbunden?",
             );
@@ -74,11 +86,10 @@ export default function Update() {
             return;
           }
 
-          // @ts-ignore
-          const res: BackendResponse = await window.__TAURI__.tauri.invoke(
-            "update_device",
-            { tarPath: "skytraxx_update.tar", softwareVersion: "4.0.0" },
-          );
+          const res: BackendResponse<void> = await invoke("update_device", {
+            tarPath: "skytraxx_update.tar",
+            softwareVersion: "deadbeef",
+          });
 
           if (res.error) {
             console.error(res.error);
