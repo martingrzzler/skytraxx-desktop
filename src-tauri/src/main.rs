@@ -40,9 +40,12 @@ async fn download_archive(window: Window, url: &str, file_name: &str) -> Result<
         .or(Err("Failed to download archive"))?;
 
     let total = response.content_length().unwrap_or(0);
-    let download_dir = path::download_dir().unwrap();
+    let mountpoint = match find_mountpoint("Skytraxx") {
+        Some(m) => m,
+        None => return Err("Skytraxx not found".to_string()),
+    };
 
-    let file_path = format!("{}/{}", download_dir.to_str().unwrap(), file_name);
+    let file_path = format!("{}/{}", mountpoint, file_name);
     let mut file = File::create(file_path).or(Err("Failed to create file"))?;
     let mut stream = response.bytes_stream();
 
@@ -84,17 +87,16 @@ fn get_skytraxx_device() -> FrontendResult<DeviceInfo> {
 
 #[tauri::command]
 fn update_device(tar_path: &str, software_version: &str) -> FrontendResult<String> {
-    let download_dir = path::download_dir().unwrap();
-    let f = match File::open(format!("{}/{}", download_dir.to_str().unwrap(), tar_path)) {
-        Ok(f) => f,
-        Err(e) => return FrontendResult::error(e.to_string()),
-    };
-    let mut ar = Archive::new(f);
-
     let mountpoint = match find_mountpoint("skytraxx") {
         Some(m) => m,
         None => return FrontendResult::error("Skytraxx not found".to_string()),
     };
+
+    let f = match File::open(format!("{}/{}", mountpoint, tar_path)) {
+        Ok(f) => f,
+        Err(e) => return FrontendResult::error(e.to_string()),
+    };
+    let mut ar = Archive::new(f);
 
     match ar.unpack(format!("{}/data", mountpoint)) {
         Ok(_) => (),
@@ -102,6 +104,11 @@ fn update_device(tar_path: &str, software_version: &str) -> FrontendResult<Strin
     }
 
     match update_device_info(software_version) {
+        Ok(_) => (),
+        Err(e) => return FrontendResult::error(e.to_string()),
+    }
+
+    match fs::remove_file(format!("{}/{}", mountpoint, tar_path)) {
         Ok(_) => (),
         Err(e) => return FrontendResult::error(e.to_string()),
     }
