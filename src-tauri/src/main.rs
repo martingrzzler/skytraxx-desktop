@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::thread;
 use std::{
     collections::HashMap,
@@ -11,7 +12,6 @@ use sysinfo::Disks;
 use tar::Archive;
 use tauri::api::path;
 use tauri::Window;
-use tokio::io::AsyncWriteExt;
 
 fn main() {
     tauri::Builder::default()
@@ -43,24 +43,18 @@ async fn download_archive(window: Window, url: &str, file_name: &str) -> Result<
     let download_dir = path::download_dir().unwrap();
 
     let file_path = format!("{}/{}", download_dir.to_str().unwrap(), file_name);
-    let mut file = tokio::io::BufWriter::new(
-        tokio::fs::File::create(file_path)
-            .await
-            .or(Err("Failed to create file"))?,
-    );
+    let mut file = File::create(file_path).or(Err("Failed to create file"))?;
     let mut stream = response.bytes_stream();
 
     let mut downloaded = 0;
     while let Some(chunk) = stream.try_next().await.or(Err("Failed to get chunk"))? {
         thread::sleep(std::time::Duration::from_millis(100));
-        file.write_all(&chunk)
-            .await
-            .or(Err("Failed to write chunk"))?;
+        file.write_all(&chunk).or(Err("Failed to write chunk"))?;
         downloaded += chunk.len() as u64;
         let _ = window.emit("DOWNLOAD_PROGRESS", DownloadProgress { total, downloaded });
     }
 
-    file.flush().await.or(Err("Failed to flush file"))?;
+    file.flush().or(Err("Failed to flush file"))?;
 
     Ok(())
 }
@@ -139,8 +133,10 @@ fn update_device_info(software_version: &str) -> Result<(), String> {
     let mut dict = get_device_info()?;
     dict.insert("sw".to_string(), software_version.to_string());
 
-    fs::write(format!("{}/.sys/hwsw.info", mountpoint), write_lines(dict))
-        .or(Err("failed to write to file")?)
+    match fs::write(format!("{}/.sys/hwsw.info", mountpoint), write_lines(dict)) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 fn find_mountpoint(vol_name: &str) -> Option<String> {

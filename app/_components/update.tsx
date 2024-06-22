@@ -37,7 +37,7 @@ export default function Update() {
       },
     );
 
-    invoke("download_archive", {
+    await invoke("download_archive", {
       url: "http://127.0.0.1:8080/archive.tar",
       fileName: "skytraxx_update.tar",
     });
@@ -60,8 +60,8 @@ export default function Update() {
         onClick={async () => {
           setError(null);
           setLoading(true);
+          setFetchProgress(null);
 
-          // @ts-ignore
           const deviceInfoRes = (await invoke(
             "get_skytraxx_device",
           )) as BackendResponse<DeviceInfo>;
@@ -88,7 +88,7 @@ export default function Update() {
 
           const res: BackendResponse<void> = await invoke("update_device", {
             tarPath: "skytraxx_update.tar",
-            softwareVersion: "deadbeef",
+            softwareVersion: "xxxx",
           });
 
           if (res.error) {
