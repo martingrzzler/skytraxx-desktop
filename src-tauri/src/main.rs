@@ -10,7 +10,6 @@ use std::{
 };
 use sysinfo::Disks;
 use tar::Archive;
-use tauri::api::path;
 use tauri::Window;
 
 fn main() {
@@ -127,7 +126,7 @@ fn get_device_info() -> Result<HashMap<String, String>, String> {
     let sys_file_content = fs::read_to_string(format!("{}/.sys/hwsw.info", mountpoint))
         .or(Err("Failed to read file"))?;
 
-    return Ok(parse_lines(&sys_file_content));
+    Ok(parse_lines(&sys_file_content))
 }
 
 fn update_device_info(software_version: &str) -> Result<(), String> {
@@ -178,7 +177,7 @@ fn parse_lines(file_content: &str) -> HashMap<String, String> {
         let parts: Vec<&str> = line.split('=').collect();
         if parts.len() == 2 {
             let key = parts[0].to_string();
-            let value = parts[1].to_string().replace("\"", "");
+            let value = parts[1].to_string().replace('"', "");
             dict.insert(key, value);
         }
     }
