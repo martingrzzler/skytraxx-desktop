@@ -2,8 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::thread;
+use std::io::prelude::Read;
+use std::io::{Seek, SeekFrom, Write};
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -16,8 +16,10 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_skytraxx_device,
-            update_device,
-            download_archive
+            extract,
+            download_archive,
+            clean_device,
+            update_device
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -50,7 +52,6 @@ async fn download_archive(window: Window, url: &str, file_name: &str) -> Result<
 
     let mut downloaded = 0;
     while let Some(chunk) = stream.try_next().await.or(Err("Failed to get chunk"))? {
-        thread::sleep(std::time::Duration::from_millis(100));
         file.write_all(&chunk).or(Err("Failed to write chunk"))?;
         downloaded += chunk.len() as u64;
         let _ = window.emit("DOWNLOAD_PROGRESS", DownloadProgress { total, downloaded });
@@ -74,7 +75,7 @@ fn get_skytraxx_device() -> FrontendResult<DeviceInfo> {
     };
 
     let software_version = match dict.get("sw") {
-        Some(version) => version.to_string(),
+        Some(version) => version.to_string().replace("build-", ""),
         None => return FrontendResult::error("software_version not found".to_string()),
     };
 
@@ -85,7 +86,7 @@ fn get_skytraxx_device() -> FrontendResult<DeviceInfo> {
 }
 
 #[tauri::command]
-fn update_device(tar_path: &str, software_version: &str) -> FrontendResult<String> {
+fn extract(tar_path: &str) -> FrontendResult<String> {
     let mountpoint = match find_mountpoint("skytraxx") {
         Some(m) => m,
         None => return FrontendResult::error("Skytraxx not found".to_string()),
@@ -97,22 +98,54 @@ fn update_device(tar_path: &str, software_version: &str) -> FrontendResult<Strin
     };
     let mut ar = Archive::new(f);
 
-    match ar.unpack(format!("{}/data", mountpoint)) {
+    match ar.unpack(format!("{}/unpacked", mountpoint)) {
         Ok(_) => (),
         Err(e) => return FrontendResult::error(e.to_string()),
     }
 
-    match update_device_info(software_version) {
+    let mut xlb_file = match File::open(format!("{}/unpacked/update/fw5mini.xlb", mountpoint)) {
+        Ok(f) => f,
+        Err(e) => return FrontendResult::error(e.to_string()),
+    };
+
+    match xlb_file.seek(SeekFrom::Start(24)) {
         Ok(_) => (),
         Err(e) => return FrontendResult::error(e.to_string()),
     }
+
+    let mut buffer = [0; 12];
+    match xlb_file.read_exact(&mut buffer) {
+        Ok(_) => (),
+        Err(e) => return FrontendResult::error(e.to_string()),
+    }
+
+    let time_str = String::from_utf8_lossy(&buffer).to_string();
+    FrontendResult::result(time_str)
+}
+
+#[tauri::command]
+fn update_device() -> FrontendResult<String> {
+    let mountpoint = match find_mountpoint("skytraxx") {
+        Some(m) => m,
+        None => return FrontendResult::error("Skytraxx not found".to_string()),
+    };
+
+    unimplemented!();
+}
+
+#[tauri::command]
+fn clean_device(tar_path: &str) -> FrontendResult<String> {
+    let mountpoint = match find_mountpoint("skytraxx") {
+        Some(m) => m,
+        None => return FrontendResult::error("Skytraxx not found".to_string()),
+    };
 
     match fs::remove_file(format!("{}/{}", mountpoint, tar_path)) {
         Ok(_) => (),
         Err(e) => return FrontendResult::error(e.to_string()),
-    }
+    };
 
-    FrontendResult::result("Tar extracted successfully".to_string())
+    FrontendResult::result("Tar removed successfully".to_string())
 }
 
 fn get_device_info() -> Result<HashMap<String, String>, String> {

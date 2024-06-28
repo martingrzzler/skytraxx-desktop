@@ -24,7 +24,7 @@ type DownloadProgress = {
 export default function Update() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [fetchProgress, setFetchProgress] = useState<number | null>(null);
 
   async function fetchWithProgress() {
@@ -32,15 +32,33 @@ export default function Update() {
     appWindow.listen(
       "DOWNLOAD_PROGRESS",
       ({ payload }: { payload: DownloadProgress }) => {
-        console.log("Download progress", payload);
         setFetchProgress((payload.downloaded / payload.total) * 100);
       },
     );
 
     await invoke("download_archive", {
-      url: "http://127.0.0.1:8080/archive.tar",
+      url: "https://www.skytraxx.org/skytraxx5mini/skytraxx5mini-essentials.tar",
       fileName: "skytraxx_update.tar",
     });
+  }
+
+  async function success(msg: string) {
+    try {
+      await invoke("clean_device", {
+        tarPath: "skytraxx_update.tar",
+      });
+    } catch (e) {
+      console.error("Error cleaning device", e);
+    }
+
+    setSuccessMessage(msg);
+    setLoading(false);
+  }
+
+  function failed(msg: string, err?: any) {
+    console.log("[ERROR]", err);
+    setError(msg);
+    setLoading(false);
   }
 
   return (
@@ -56,61 +74,74 @@ export default function Update() {
       )}
       <Button
         isLoading={loading}
-        isDisabled={loading || showSuccess}
+        isDisabled={loading || !!successMessage}
         onClick={async () => {
           setError(null);
           setLoading(true);
           setFetchProgress(null);
+          setSuccessMessage(null);
 
           const deviceInfoRes = (await invoke(
             "get_skytraxx_device",
           )) as BackendResponse<DeviceInfo>;
           if (deviceInfoRes.error) {
-            setError(
+            return failed(
               "Skytraxx Vario konnte nicht gefunden werden. Ist es angeschlossen?",
+              deviceInfoRes.error,
             );
-            setLoading(false);
-            return;
           }
 
-          console.log(deviceInfoRes.result);
-          // depending on the device info, we can now download the correct tar file
+          if (deviceInfoRes.result?.deviceName !== "5mini") {
+            return failed(
+              "Im Moment können nur Skytraxx 5 Mini Geräte aktualisiert werden.",
+            );
+          }
+
           try {
             await fetchWithProgress();
           } catch (error) {
-            console.log("Download error", error);
-            setError(
+            return failed(
               "Fehler beim Herunterladen der Datei. Bist du mit dem Internet verbunden?",
+              error,
             );
-            setLoading(false);
-            return;
           }
 
-          const res: BackendResponse<void> = await invoke("update_device", {
+          const extractRes: BackendResponse<string> = await invoke("extract", {
             tarPath: "skytraxx_update.tar",
-            softwareVersion: "xxxx",
           });
 
-          if (res.error) {
-            console.error(res.error);
-            setError(res.error);
-            setLoading(false);
-            return;
+          if (extractRes.error) {
+            return failed("Fehler beim Entpacken der Datei.", extractRes.error);
           }
 
-          setLoading(false);
-          setShowSuccess(true);
+          const updateSoftwareVersion = parseInt(extractRes.result!);
+          console.log(
+            "[DEBUG]",
+            "update sw",
+            updateSoftwareVersion,
+            "device sw",
+            deviceInfoRes.result!.softwareVersion,
+          );
+          if (
+            updateSoftwareVersion <=
+            parseInt(deviceInfoRes.result!.softwareVersion)
+          ) {
+            return success(
+              "Dein Skytraxx Vario ist bereits auf dem neuesten Stand! Du kannst die App jetzt schließen.",
+            );
+          }
+
+          // update device
+
+          success(
+            "Dein Vario wurde erfolgreich aktualisiert! Du kannst die App jetzt schließen.",
+          );
         }}
         className="px-2 rounded py-1 ring-1 ring-gray-400 mt-8"
       >
         Vario aktualisieren
       </Button>
-      {showSuccess && (
-        <Text ringColor="green">
-          Vario wurde erfolgreich aktualisiert! Du kannst die App jetzt
-          schließen.
-        </Text>
-      )}
+      {!!successMessage && <Text ringColor="green">{successMessage}</Text>}
     </div>
   );
 }
